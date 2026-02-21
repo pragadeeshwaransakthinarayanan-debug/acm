@@ -5,7 +5,7 @@ class Mark(Base):
     __tablename__ = "marks"
 
     id = Column(Integer, primary_key=True, index=True)
-    laid = Column(String, index=True, nullable=False)
+    x_session_code = Column(String, index=True, nullable=False)
     institution_id = Column(Integer, index=True, nullable=False)
 
     course_code = Column(String, nullable=False)

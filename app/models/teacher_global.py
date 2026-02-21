@@ -5,7 +5,7 @@ class TeacherGlobal(Base):
     __tablename__ = "teachers_global"
 
     id = Column(Integer, primary_key=True, index=True)
-    laid = Column(String, unique=True, index=True, nullable=False)
+    x_session_code = Column(String, unique=True, index=True, nullable=False)
 
     name = Column(String)
     qualification = Column(String)

@@ -14,4 +14,4 @@ class FeeOut(BaseModel):
     paid: int
 
     class Config:
-        orm_mode = True
+        from_attributes = True

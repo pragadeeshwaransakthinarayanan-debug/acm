@@ -5,9 +5,12 @@ class Attendance(Base):
     __tablename__ = "attendance"
 
     id = Column(Integer, primary_key=True, index=True)
-    laid = Column(String, index=True, nullable=False)
+
+    # REQUIRED for your ERP multi-tenant rules
+    x_session_code = Column(String, index=True, nullable=False)
     institution_id = Column(Integer, index=True, nullable=False)
 
+    # Optional but useful
     date = Column(Date, nullable=True)
     course_code = Column(String, nullable=True)
     status = Column(String, nullable=False, default="P")

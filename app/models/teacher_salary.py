@@ -5,7 +5,7 @@ class TeacherSalary(Base):
     __tablename__ = "teacher_salary"
 
     id = Column(Integer, primary_key=True, index=True)
-    teacher_laid = Column(String, index=True, nullable=False)
+    teacher_x_session_code = Column(String, index=True, nullable=False)
     institution_id = Column(Integer, index=True, nullable=False)
 
     amount = Column(Float, nullable=False)
