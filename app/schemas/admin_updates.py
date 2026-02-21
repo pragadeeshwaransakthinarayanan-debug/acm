@@ -2,17 +2,15 @@ from pydantic import BaseModel
 from datetime import date
 from typing import Optional
 
-class FeeUpsert(BaseModel):
-    student_laid: str
+class StudentFeeUpsert(BaseModel):
+    student_x_session_code: str
     institution_id: int
     amount: float
-    paid: int  # 0/1
-    paid_on: Optional[date] = None
+    paid: int = 0
+    date: Optional[date] = None
 
-class SalaryUpsert(BaseModel):
-    teacher_laid: str
+class TeacherSalaryUpsert(BaseModel):
+    teacher_x_session_code: str
     institution_id: int
     amount: float
-    month: Optional[str] = None   # "2026-02"
-    status: str = "paid"
-    paid_on: Optional[date] = None
+    month: str  # "2026-02"

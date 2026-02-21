@@ -1,81 +1,74 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 from app.database import get_db
 
-from app.models.students_global import StudentGlobal
+from app.models.students import Student
 from app.models.teacher_global import TeacherGlobal
-from app.schemas.admin_updates import FeeUpsert, SalaryUpsert
-from app.models.fees import Fees
+from app.models.fees import Fee
 from app.models.teacher_salary import TeacherSalary
-from sqlalchemy.exc import SQLAlchemyError
+
+from app.models.admin_global import AdminGlobal
+from app.models.admin_institution_link import AdminInstitutionLink
+
+from app.schemas.admin_updates import StudentFeeUpsert, TeacherSalaryUpsert
 
 router = APIRouter(prefix="/admin", tags=["Admin Portal"])
 
 
-def verify_admin(db: Session, laid: str):
-    # For now just check LAID exists in teacher table
-    admin = db.query(TeacherGlobal).filter(
-        TeacherGlobal.laid == laid
+def verify_admin(db: Session, admin_x_session_code: str, institution_id: int):
+    a = db.query(AdminGlobal).filter(AdminGlobal.x_session_code == admin_x_session_code).first()
+    if not a:
+        raise HTTPException(status_code=401, detail="Invalid admin x-session code")
+
+    link = db.query(AdminInstitutionLink).filter(
+        AdminInstitutionLink.admin_x_session_code == admin_x_session_code,
+        AdminInstitutionLink.institution_id == institution_id
     ).first()
 
-    if not admin:
-        raise HTTPException(status_code=401, detail="Invalid LAID")
-
-    return admin
+    if not link:
+        raise HTTPException(status_code=403, detail="Admin not linked to this institution")
 
 
 @router.get("/students")
 def view_students(
-    laid: str = Query(...),
+    admin_x_session_code: str = Query(...),
     institution_id: int = Query(...),
     db: Session = Depends(get_db),
 ):
-    verify_admin(db, laid)
-
-    students = db.query(StudentGlobal).filter(
-        StudentGlobal.institution_id == institution_id
-    ).all()
-
-    return students
+    verify_admin(db, admin_x_session_code, institution_id)
+    rows = db.query(Student).filter(Student.institution_id == institution_id).all()
+    return rows
 
 
 @router.get("/teachers")
 def view_teachers(
-    laid: str = Query(...),
+    admin_x_session_code: str = Query(...),
     institution_id: int = Query(...),
     db: Session = Depends(get_db),
 ):
-    verify_admin(db, laid)
+    verify_admin(db, admin_x_session_code, institution_id)
+    # if TeacherGlobal does not have institution_id, you may need to join with TeacherInstitutionLink
+    rows = db.query(TeacherGlobal).all()
+    return rows
 
-    teachers = db.query(TeacherGlobal).all()
 
-    return teachers
-@router.post("/fees")
-def upsert_fee(
-    payload: FeeUpsert,
-    laid: str = Query(...),
+@router.post("/students/fees")
+def upsert_student_fee(
+    payload: StudentFeeUpsert,
+    admin_x_session_code: str = Query(...),
     db: Session = Depends(get_db),
 ):
-    verify_admin(db, laid)  # your existing verify_admin
+    verify_admin(db, admin_x_session_code, payload.institution_id)
 
-    row = db.query(Fees).filter(
-        Fees.laid == payload.student_laid,
-        Fees.institution_id == payload.institution_id,
-        Fees.date == payload.date
-    ).first()
-
-    if row:
-        row.amount = payload.amount
-        row.paid = payload.paid
-    else:
-        row = Fees(
-            laid=payload.student_laid,
-            institution_id=payload.institution_id,
-            amount=payload.amount,
-            paid=payload.paid,
-            date=payload.date
-        )
-        db.add(row)
+    row = Fee(
+        x_session_code=payload.student_x_session_code,
+        institution_id=payload.institution_id,
+        amount=payload.amount,
+        paid=payload.paid,
+        date=payload.date
+    )
+    db.add(row)
 
     try:
         db.commit()
@@ -84,37 +77,24 @@ def upsert_fee(
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-    return {"message": "Fee updated", "id": row.id}
+    return {"message": "Fee record added", "id": row.id}
 
 
-@router.post("/salary")
-def upsert_salary(
-    payload: SalaryUpsert,
-    laid: str = Query(...),
+@router.post("/teachers/salary")
+def upsert_teacher_salary(
+    payload: TeacherSalaryUpsert,
+    admin_x_session_code: str = Query(...),
     db: Session = Depends(get_db),
 ):
-    verify_admin(db, laid)
+    verify_admin(db, admin_x_session_code, payload.institution_id)
 
-    row = db.query(TeacherSalary).filter(
-        TeacherSalary.teacher_laid == payload.teacher_laid,
-        TeacherSalary.institution_id == payload.institution_id,
-        TeacherSalary.month == payload.month
-    ).first()
-
-    if row:
-        row.amount = payload.amount
-        row.status = payload.status
-        row.paid_on = payload.paid_on
-    else:
-        row = TeacherSalary(
-            teacher_laid=payload.teacher_laid,
-            institution_id=payload.institution_id,
-            amount=payload.amount,
-            month=payload.month,
-            status=payload.status,
-            paid_on=payload.paid_on
-        )
-        db.add(row)
+    row = TeacherSalary(
+        teacher_x_session_code=payload.teacher_x_session_code,
+        institution_id=payload.institution_id,
+        amount=payload.amount,
+        month=payload.month
+    )
+    db.add(row)
 
     try:
         db.commit()
@@ -123,4 +103,4 @@ def upsert_salary(
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-    return {"message": "Salary updated", "id": row.id}
+    return {"message": "Salary record added", "id": row.id}

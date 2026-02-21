@@ -1,156 +1,109 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
-
 from app.database import get_db
 
-# Schemas
-from app.schemas.teacher_profile import TeacherProfileCreate
-from app.schemas.teacher_updates import StudentAttendanceUpsert, StudentMarksUpsert
-
-# Models
 from app.models.teacher_global import TeacherGlobal
 from app.models.teacher_institution_link import TeacherInstitutionLink
-
-from app.models.teacher_attendence import TeacherAttendance
-from app.models.teacher_salary import TeacherSalary
-from app.models.teacher_course_assignment import TeacherCourseAssignment
-
 from app.models.attendance import Attendance
-from app.models.marks import Marks  # if your class name is Marks (as your file says)
+from app.models.marks import Mark
 
+from app.schemas.teacher_updates import StudentAttendanceUpsert, StudentMarksUpsert
+from app.schemas.teacher_profile import TeacherProfileCreate, TeacherProfileUpdate
 
 router = APIRouter(prefix="/teacher", tags=["Teacher Portal"])
 
 
-# ==============================
-# Helper: verify teacher
-# ==============================
-def verify_teacher(db: Session, teacher_laid: str, institution_id: int) -> TeacherGlobal:
-    teacher = db.query(TeacherGlobal).filter(TeacherGlobal.laid == teacher_laid).first()
-    if not teacher:
-        raise HTTPException(status_code=401, detail="Invalid teacher LAID")
+def verify_teacher(db: Session, teacher_x_session_code: str, institution_id: int) -> TeacherGlobal:
+    t = db.query(TeacherGlobal).filter(TeacherGlobal.x_session_code == teacher_x_session_code).first()
+    if not t:
+        raise HTTPException(status_code=401, detail="Invalid teacher x-session code")
 
     link = db.query(TeacherInstitutionLink).filter(
-        TeacherInstitutionLink.teacher_laid == teacher_laid,
+        TeacherInstitutionLink.teacher_x_session_code == teacher_x_session_code,
         TeacherInstitutionLink.institution_id == institution_id
     ).first()
     if not link:
         raise HTTPException(status_code=403, detail="Teacher not linked to this institution")
 
-    return teacher
+    return t
 
 
-# ==============================
-# 1) Teacher profile CREATE (POST) - like student profile
-# ==============================
+# ---------------------------
+# Teacher profile (create/upsert + view)
+# ---------------------------
+
 @router.post("/profile")
-def create_teacher_profile(
-    payload: TeacherProfileCreate,
-    db: Session = Depends(get_db),
-):
-    existing = db.query(TeacherGlobal).filter(TeacherGlobal.laid == payload.laid).first()
+def create_teacher_profile(payload: TeacherProfileCreate, db: Session = Depends(get_db)):
+    existing = db.query(TeacherGlobal).filter(TeacherGlobal.x_session_code == payload.x_session_code).first()
     if existing:
-        raise HTTPException(status_code=409, detail="Teacher profile already exists")
+        raise HTTPException(status_code=409, detail="Teacher already exists")
 
-    teacher = TeacherGlobal(
-        laid=payload.laid,
-        name=payload.name,
-        qualification=payload.qualification,
-        age=payload.age,
-        mobile=payload.mobile,
-        email=payload.email,
-        gender=payload.gender,
-    )
+    t = TeacherGlobal(**payload.model_dump(exclude={"institution_id"}))
+    db.add(t)
+
+    # also create link
+    link = TeacherInstitutionLink(teacher_x_session_code=payload.x_session_code, institution_id=payload.institution_id)
+    db.add(link)
 
     try:
-        db.add(teacher)
         db.commit()
-        db.refresh(teacher)
+        db.refresh(t)
     except SQLAlchemyError as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-    return {"message": "Teacher profile created", "id": teacher.id}
+    return {"message": "Teacher created", "x_session_code": t.x_session_code}
 
 
-# ==============================
-# 2) Teacher "me" (optional info) - returns only ids
-# ==============================
-@router.get("/me")
-def teacher_me(
-    teacher_laid: str = Query(...),
+@router.get("/profile")
+def get_teacher_profile(
+    teacher_x_session_code: str = Query(...),
     institution_id: int = Query(...),
     db: Session = Depends(get_db),
 ):
-    verify_teacher(db, teacher_laid, institution_id)
-    return {"teacher_laid": teacher_laid, "institution_id": institution_id}
+    t = verify_teacher(db, teacher_x_session_code, institution_id)
+    return {
+        "x_session_code": t.x_session_code,
+        "name": t.name,
+        "qualification": t.qualification,
+        "age": t.age,
+        "mobile": t.mobile,
+        "email": t.email,
+        "gender": t.gender,
+    }
 
 
-# ==============================
-# 3) Teacher self endpoints
-# ==============================
-@router.get("/me/attendance")
-def teacher_my_attendance(
-    teacher_laid: str = Query(...),
+@router.put("/profile")
+def update_teacher_profile(
+    payload: TeacherProfileUpdate,
+    teacher_x_session_code: str = Query(...),
     institution_id: int = Query(...),
     db: Session = Depends(get_db),
 ):
-    verify_teacher(db, teacher_laid, institution_id)
+    t = verify_teacher(db, teacher_x_session_code, institution_id)
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(t, field, value)
 
-    rows = db.query(TeacherAttendance).filter(
-        TeacherAttendance.teacher_laid == teacher_laid,
-        TeacherAttendance.institution_id == institution_id
-    ).all()
-
-    return rows
-
-
-@router.get("/me/salary")
-def teacher_my_salary(
-    teacher_laid: str = Query(...),
-    institution_id: int = Query(...),
-    db: Session = Depends(get_db),
-):
-    verify_teacher(db, teacher_laid, institution_id)
-
-    rows = db.query(TeacherSalary).filter(
-        TeacherSalary.teacher_laid == teacher_laid,
-        TeacherSalary.institution_id == institution_id
-    ).all()
-
-    return rows
+    db.commit()
+    db.refresh(t)
+    return {"message": "Teacher profile updated"}
 
 
-@router.get("/me/courses")
-def teacher_my_courses(
-    teacher_laid: str = Query(...),
-    institution_id: int = Query(...),
-    db: Session = Depends(get_db),
-):
-    verify_teacher(db, teacher_laid, institution_id)
+# ---------------------------
+# Teacher updates student data
+# ---------------------------
 
-    rows = db.query(TeacherCourseAssignment).filter(
-        TeacherCourseAssignment.teacher_laid == teacher_laid,
-        TeacherCourseAssignment.institution_id == institution_id
-    ).all()
-
-    return rows
-
-
-# ==============================
-# 4) Teacher updates student attendance (UPSERT)
-# ==============================
 @router.post("/students/attendance")
 def upsert_student_attendance(
     payload: StudentAttendanceUpsert,
-    teacher_laid: str = Query(...),
+    teacher_x_session_code: str = Query(...),
     db: Session = Depends(get_db),
 ):
-    verify_teacher(db, teacher_laid, payload.institution_id)
+    verify_teacher(db, teacher_x_session_code, payload.institution_id)
 
     row = db.query(Attendance).filter(
-        Attendance.laid == payload.student_laid,
+        Attendance.x_session_code == payload.student_x_session_code,
         Attendance.institution_id == payload.institution_id,
         Attendance.course_code == payload.course_code,
         Attendance.date == payload.date
@@ -160,7 +113,7 @@ def upsert_student_attendance(
         row.status = payload.status
     else:
         row = Attendance(
-            laid=payload.student_laid,
+            x_session_code=payload.student_x_session_code,
             institution_id=payload.institution_id,
             course_code=payload.course_code,
             date=payload.date,
@@ -175,32 +128,29 @@ def upsert_student_attendance(
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-    return {"message": "Attendance updated", "id": row.id}
+    return {"message": "Attendance upserted", "id": row.id}
 
 
-# ==============================
-# 5) Teacher updates student marks (UPSERT)
-# ==============================
 @router.post("/students/marks")
 def upsert_student_marks(
     payload: StudentMarksUpsert,
-    teacher_laid: str = Query(...),
+    teacher_x_session_code: str = Query(...),
     db: Session = Depends(get_db),
 ):
-    verify_teacher(db, teacher_laid, payload.institution_id)
+    verify_teacher(db, teacher_x_session_code, payload.institution_id)
 
-    row = db.query(Marks).filter(
-        Marks.laid == payload.student_laid,
-        Marks.institution_id == payload.institution_id,
-        Marks.course_code == payload.course_code,
-        Marks.date == payload.date
+    row = db.query(Mark).filter(
+        Mark.x_session_code == payload.student_x_session_code,
+        Mark.institution_id == payload.institution_id,
+        Mark.course_code == payload.course_code,
+        Mark.date == payload.date
     ).first()
 
     if row:
         row.marks = payload.marks
     else:
-        row = Marks(
-            laid=payload.student_laid,
+        row = Mark(
+            x_session_code=payload.student_x_session_code,
             institution_id=payload.institution_id,
             course_code=payload.course_code,
             date=payload.date,
@@ -215,4 +165,35 @@ def upsert_student_marks(
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-    return {"message": "Marks updated", "id": row.id}
+    return {"message": "Marks upserted", "id": row.id}
+from app.core.session_deps import get_current_teacher
+from app.models.session import SessionToken
+@router.get("/me/profile")
+def get_my_profile(
+    session: SessionToken = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    teacher_x_session_code = session.x_session_code
+    institution_id = session.institution_id
+    t = verify_teacher(db, teacher_x_session_code, institution_id)
+    return {
+        "x_session_code": t.x_session_code,
+        "name": t.name,
+        "qualification": t.qualification,
+        "age": t.age,
+        "mobile": t.mobile,
+        "email": t.email,
+        "gender": t.gender,
+    }
+@router.post("/me/students/attendance")
+def upsert_attendance(
+    payload: StudentAttendanceUpsert,
+    session: SessionToken = Depends(get_current_teacher),
+    db: Session = Depends(get_db),
+):
+    teacher_x_session_code = session.x_session_code
+    institution_id = session.institution_id
+
+    if payload.institution_id != institution_id:
+        raise HTTPException(status_code=403, detail="Institution mismatch")
+    ...
